@@ -27,6 +27,9 @@ class ScrapeResult(BaseModel):
     comments: int | None = None
     duration_sec: float | None = None
     thumbnail: str | None = None
+    # Enlaces extraídos del caption, con su etiqueta ("detalle"). Para posts que
+    # son listas curadas de recursos (el resumen de IA los aplana y pierde).
+    links: list[dict] = []
     # Media para transcribir con Whisper en Supabase. `video_url` es preferente
     # (lleva la voz real publicada); `audio_url` es el fallback.
     video_url: str | None = None

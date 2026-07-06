@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 
+from .links import extract_links
 from .models import ScrapeResult
 
 # UA de navegador móvil: los CDN de IG/TikTok y las páginas rechazan requests
@@ -394,18 +395,23 @@ def identify_and_extract(url: str) -> ScrapeResult | None:
     if "instagram.com/share/" in url:
         url = _resolve_redirect(url)
 
+    result: ScrapeResult | None = None
     if re.search(r"instagram\.com/(?:reel|reels|p)/", url):
-        return extract_instagram(url)
+        result = extract_instagram(url)
+    else:
+        m = re.search(r"(?:twitter|x)\.com/[^/]+/status/(\d+)", url)
+        if m:
+            result = extract_x(url, m.group(1))
+        elif "tiktok.com/" in url:
+            result = extract_tiktok(url)
+        else:
+            yt = youtube_video_id(url)
+            if yt:
+                result = extract_youtube(url, yt)
 
-    m = re.search(r"(?:twitter|x)\.com/[^/]+/status/(\d+)", url)
-    if m:
-        return extract_x(url, m.group(1))
+    if result is None:
+        return None
 
-    if "tiktok.com/" in url:
-        return extract_tiktok(url)
-
-    yt = youtube_video_id(url)
-    if yt:
-        return extract_youtube(url, yt)
-
-    return None
+    # Enlaces con etiqueta desde el caption (listas de recursos, etc.).
+    result.links = extract_links(result.caption)
+    return result
