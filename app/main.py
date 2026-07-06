@@ -24,7 +24,21 @@ from .models import ScrapeRequest, ScrapeResult
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("scraper")
 
-TOKEN = os.environ.get("LATER_SCRAPER_TOKEN", "")
+def _load_token() -> str:
+    """Token desde env var o, preferentemente, desde un fichero (Docker secret).
+    LATER_SCRAPER_TOKEN_FILE o el secret montado en /run/secrets/."""
+    path = os.environ.get("LATER_SCRAPER_TOKEN_FILE") or "/run/secrets/later_scraper_token"
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            value = fh.read().strip()
+            if value:
+                return value
+    except OSError:
+        pass
+    return os.environ.get("LATER_SCRAPER_TOKEN", "")
+
+
+TOKEN = _load_token()
 # Máximo de navegadores stealth concurrentes. La VM tiene 8 GB; cada Chromium
 # headless come ~0.7–1 GB. 2 deja margen de sobra.
 MAX_CONCURRENT = int(os.environ.get("SCRAPER_MAX_CONCURRENT", "2"))
