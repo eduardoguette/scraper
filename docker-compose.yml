@@ -1,0 +1,11 @@
+# Para pruebas locales o despliegue manual con Docker.
+# En vm-eddy el despliegue real lo gestiona Dokploy (Traefik pone el TLS).
+services:
+  scraper:
+    build: .
+    ports:
+      - "8090:8080"
+    environment:
+      LATER_SCRAPER_TOKEN: ${LATER_SCRAPER_TOKEN}
+      SCRAPER_MAX_CONCURRENT: ${SCRAPER_MAX_CONCURRENT:-2}
+    restart: unless-stopped

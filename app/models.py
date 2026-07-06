@@ -1,0 +1,36 @@
+"""Forma canónica que devuelve el scraper.
+
+Es un reemplazo directo de lo que antes entregaba Bright Data: las Edge
+Functions de Later (`_shared/reel-enrich.ts` → `normalize()`) consumen estos
+campos. Todos son opcionales salvo `platform`, y el lado de Supabase degrada
+con gracia cuando faltan (p.ej. sin `video_url` no transcribe; sin `caption`
+usa el fallback de visión)."""
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+
+class ScrapeRequest(BaseModel):
+    url: str
+
+
+class ScrapeResult(BaseModel):
+    platform: str
+    # YouTube trae título real del vídeo; reels/posts no.
+    title: str | None = None
+    caption: str = ""
+    author: str | None = None
+    hashtags: list[str] = []
+    views: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    duration_sec: float | None = None
+    thumbnail: str | None = None
+    # Media para transcribir con Whisper en Supabase. `video_url` es preferente
+    # (lleva la voz real publicada); `audio_url` es el fallback.
+    video_url: str | None = None
+    audio_url: str | None = None
+    # Transcripción ya resuelta en origen (YouTube nativo). Evita pasar por
+    # Whisper cuando está disponible.
+    transcript: str | None = None
