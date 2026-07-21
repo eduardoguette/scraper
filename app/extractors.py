@@ -145,6 +145,62 @@ def extract_instagram(url: str) -> ScrapeResult:
     )
 
 
+# ─────────────────────────── facebook (reels/watch) ───────────────────────────
+
+def _parse_fb_og_title(og_title: str | None) -> tuple[str | None, str]:
+    """og:title de Facebook viene como 'Author on Facebook: "caption…"' o solo
+    'Author' cuando no hay caption expuesto sin login. Mismo formato que IG."""
+    if not og_title:
+        return None, ""
+    m = re.match(r"^(.*?) on Facebook(?:\s*[:\-–])?\s*(.*)$", og_title, re.DOTALL)
+    if m:
+        author = m.group(1).strip() or None
+        caption = m.group(2).strip().strip('"').strip("“”").strip()
+        return author, caption
+    return og_title.strip() or None, ""
+
+
+def extract_facebook(url: str) -> ScrapeResult:
+    """Reels/vídeos públicos de Facebook — mismo stack Meta que Instagram, así
+    que el mismo enfoque de navegador stealth aplica: el HTML plano da un
+    cascarón vacío (login wall), el stealth sí entrega los og: tags y, cuando
+    el vídeo es público, la URL del mp4 embebida en el JSON de la página."""
+    from scrapling.fetchers import StealthyFetcher
+
+    page = StealthyFetcher.fetch(
+        url, headless=True, network_idle=True, timeout=60000
+    )
+    body = str(page.body)
+
+    def og(prop: str) -> str | None:
+        r = page.css(f'meta[property="{prop}"]::attr(content)')
+        return str(r[0]) if r else None
+
+    author, caption = _parse_fb_og_title(og("og:title"))
+    og_desc = og("og:description") or ""
+
+    video_url = og("og:video") or og("og:video:secure_url")
+    if not video_url:
+        # Claves internas que Facebook embebe en el JSON de la página para el
+        # reproductor nativo — nombres distintos a IG/TikTok, mismo propósito.
+        for key in ("playable_url_quality_hd", "playable_url", "browser_native_hd_url", "browser_native_sd_url"):
+            m = re.search(rf'"{key}"\s*:\s*"([^"]+)"', body)
+            if m:
+                video_url = _unescape(m.group(1))
+                break
+
+    thumbnail = og("og:image")
+
+    return ScrapeResult(
+        platform="facebook",
+        caption=caption or og_desc,
+        author=author,
+        hashtags=_hashtags_from(caption or og_desc),
+        thumbnail=thumbnail,
+        video_url=video_url,
+    )
+
+
 def _parse_count(s: str) -> int | None:
     """'1,234' / '12.3K' / '4M' → entero."""
     if not s:
@@ -414,6 +470,8 @@ def identify_and_extract(url: str, want_html: bool = False) -> ScrapeResult | No
     result: ScrapeResult | None = None
     if re.search(r"instagram\.com/(?:reel|reels|p)/", url):
         result = extract_instagram(url)
+    elif re.search(r"(?:facebook\.com/(?:reel/|watch/?\?|[^/]+/videos/)|fb\.watch/)", url):
+        result = extract_facebook(url)
     else:
         m = re.search(r"(?:twitter|x)\.com/[^/]+/status/(\d+)", url)
         if m:
