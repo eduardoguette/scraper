@@ -388,10 +388,26 @@ def _youtube_transcript(video_id: str) -> str | None:
         return None
 
 
+# ─────────────────────────── genérico (no-social) ───────────────────────────
+
+def extract_generic(url: str) -> ScrapeResult:
+    """Fetch genérico con navegador stealth para páginas no-social (noticias,
+    blogs, etc.) detrás de un WAF/reto JS que bloquea un fetch plano desde una
+    IP de datacenter. Devuelve el HTML renderizado tal cual — el caller
+    (enrich-web en Later) hace su propia extracción de título/descripción/
+    JSON-LD sobre ese HTML, igual que si hubiera llegado por fetch directo."""
+    from scrapling.fetchers import StealthyFetcher
+
+    page = StealthyFetcher.fetch(url, headless=True, network_idle=True, timeout=60000)
+    return ScrapeResult(platform="web", html=str(page.body))
+
+
 # ─────────────────────────── dispatch ───────────────────────────
 
-def identify_and_extract(url: str) -> ScrapeResult | None:
-    """Detecta plataforma y delega. Devuelve None si no es soportada."""
+def identify_and_extract(url: str, want_html: bool = False) -> ScrapeResult | None:
+    """Detecta plataforma y delega. Si no es una plataforma social soportada:
+    devuelve None (comportamiento de siempre) salvo que `want_html=True`, en
+    cuyo caso cae al fetch genérico con navegador stealth."""
     if "instagram.com/share/" in url:
         url = _resolve_redirect(url)
 
@@ -410,7 +426,9 @@ def identify_and_extract(url: str) -> ScrapeResult | None:
                 result = extract_youtube(url, yt)
 
     if result is None:
-        return None
+        if not want_html:
+            return None
+        result = extract_generic(url)
 
     # Enlaces con etiqueta desde el caption (listas de recursos, etc.).
     result.links = extract_links(result.caption)

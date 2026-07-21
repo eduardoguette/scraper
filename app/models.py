@@ -13,6 +13,12 @@ from pydantic import BaseModel
 
 class ScrapeRequest(BaseModel):
     url: str
+    # Si es True y la URL no es de una plataforma social soportada, en vez de
+    # devolver 422 hacemos un fetch genérico con navegador stealth y devolvemos
+    # el HTML renderizado en `html` (el caller decide cómo extraerlo). Si es
+    # False (default), el comportamiento no cambia — compatibilidad total con
+    # callers existentes (recover-cover, enrich-reel).
+    html: bool = False
 
 
 class ScrapeResult(BaseModel):
@@ -37,3 +43,6 @@ class ScrapeResult(BaseModel):
     # Transcripción ya resuelta en origen (YouTube nativo). Evita pasar por
     # Whisper cuando está disponible.
     transcript: str | None = None
+    # HTML renderizado por el navegador stealth — solo presente cuando
+    # `platform == "web"` (modo genérico, ver ScrapeRequest.html).
+    html: str | None = None

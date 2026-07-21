@@ -71,7 +71,7 @@ async def scrape(body: ScrapeRequest) -> ScrapeResult | JSONResponse:
     async with _semaphore:
         try:
             # Scrapling es síncrono → threadpool para no bloquear el loop.
-            result = await asyncio.to_thread(identify_and_extract, url)
+            result = await asyncio.to_thread(identify_and_extract, url, body.html)
         except Exception as err:  # noqa: BLE001
             log.exception("scrape failed for %s", url)
             raise HTTPException(status_code=502, detail=f"scrape error: {err}") from err
