@@ -10,10 +10,15 @@ datacenter, verificada en vm-eddy):
     y video_url del JSON embebido.
   - youtube   → página watch (ytInitialPlayerResponse) + youtube-transcript-api
     para la transcripción nativa (gratis, exacta).
+  - facebook  → HTML plano con UA de Googlebot. Facebook le sirve a crawlers
+    conocidos (SEO) los og:tags reales incluso para /share/r/ sin login;
+    con cualquier otro UA (o sin UA de bot) devuelve un muro de login. El
+    audio va aparte en el manifest DASH embebido (video mudo + audio-only).
 """
 
 from __future__ import annotations
 
+import html as html_module
 import json
 import re
 from urllib.parse import parse_qs, quote, urlparse
@@ -33,6 +38,9 @@ _DESKTOP_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 )
+# Facebook le sirve og:tags reales a crawlers conocidos (SEO) sin exigir login;
+# con UA de navegador normal devuelve un muro de login/checkpoint.
+_GOOGLEBOT_UA = "Googlebot/2.1 (+http://www.google.com/bot.html)"
 
 _HTTP_TIMEOUT = 20.0
 
@@ -140,62 +148,6 @@ def extract_instagram(url: str) -> ScrapeResult:
         hashtags=_hashtags_from(caption or og_desc),
         likes=likes,
         comments=comments,
-        thumbnail=thumbnail,
-        video_url=video_url,
-    )
-
-
-# ─────────────────────────── facebook (reels/watch) ───────────────────────────
-
-def _parse_fb_og_title(og_title: str | None) -> tuple[str | None, str]:
-    """og:title de Facebook viene como 'Author on Facebook: "caption…"' o solo
-    'Author' cuando no hay caption expuesto sin login. Mismo formato que IG."""
-    if not og_title:
-        return None, ""
-    m = re.match(r"^(.*?) on Facebook(?:\s*[:\-–])?\s*(.*)$", og_title, re.DOTALL)
-    if m:
-        author = m.group(1).strip() or None
-        caption = m.group(2).strip().strip('"').strip("“”").strip()
-        return author, caption
-    return og_title.strip() or None, ""
-
-
-def extract_facebook(url: str) -> ScrapeResult:
-    """Reels/vídeos públicos de Facebook — mismo stack Meta que Instagram, así
-    que el mismo enfoque de navegador stealth aplica: el HTML plano da un
-    cascarón vacío (login wall), el stealth sí entrega los og: tags y, cuando
-    el vídeo es público, la URL del mp4 embebida en el JSON de la página."""
-    from scrapling.fetchers import StealthyFetcher
-
-    page = StealthyFetcher.fetch(
-        url, headless=True, network_idle=True, timeout=60000
-    )
-    body = str(page.body)
-
-    def og(prop: str) -> str | None:
-        r = page.css(f'meta[property="{prop}"]::attr(content)')
-        return str(r[0]) if r else None
-
-    author, caption = _parse_fb_og_title(og("og:title"))
-    og_desc = og("og:description") or ""
-
-    video_url = og("og:video") or og("og:video:secure_url")
-    if not video_url:
-        # Claves internas que Facebook embebe en el JSON de la página para el
-        # reproductor nativo — nombres distintos a IG/TikTok, mismo propósito.
-        for key in ("playable_url_quality_hd", "playable_url", "browser_native_hd_url", "browser_native_sd_url"):
-            m = re.search(rf'"{key}"\s*:\s*"([^"]+)"', body)
-            if m:
-                video_url = _unescape(m.group(1))
-                break
-
-    thumbnail = og("og:image")
-
-    return ScrapeResult(
-        platform="facebook",
-        caption=caption or og_desc,
-        author=author,
-        hashtags=_hashtags_from(caption or og_desc),
         thumbnail=thumbnail,
         video_url=video_url,
     )
@@ -458,6 +410,118 @@ def extract_generic(url: str) -> ScrapeResult:
     return ScrapeResult(platform="web", html=str(page.body))
 
 
+# ─────────────────────────── facebook ───────────────────────────
+
+# "4,4 mill." / "126 mil" (es) o "4.4M" / "126K" (en) → multiplicador.
+_FB_STAT_MULT = {"mill.": 1_000_000, "mil": 1_000, "M": 1_000_000, "K": 1_000}
+
+
+def _parse_fb_stat(num: str, suffix: str | None) -> int | None:
+    if not num:
+        return None
+    if suffix in ("mill.", "mil", "M", "K"):
+        try:
+            value = float(num.replace(",", ".")) * _FB_STAT_MULT[suffix]
+        except ValueError:
+            return None
+    else:
+        digits = re.sub(r"[^\d]", "", num)
+        if not digits:
+            return None
+        value = int(digits)
+    return int(value)
+
+
+def _fb_stats_from_title(og_title: str | None) -> tuple[int | None, int | None]:
+    """og:title de un reel viene como
+    'N reproducciones · M reacciones | caption | Página'."""
+    text = html_module.unescape(og_title or "")
+    views = likes = None
+    m = re.search(r"([\d.,]+)\s*(mill\.|mil|M|K)?\s*(?:reproducciones|views)", text, re.I)
+    if m:
+        views = _parse_fb_stat(m.group(1), m.group(2))
+    m = re.search(r"([\d.,]+)\s*(mill\.|mil|M|K)?\s*(?:reacciones|reactions|likes)", text, re.I)
+    if m:
+        likes = _parse_fb_stat(m.group(1), m.group(2))
+    return views, likes
+
+
+def _fb_author_from_title(og_title: str | None) -> str | None:
+    """El último segmento tras '|' en og:title es el nombre de la página."""
+    text = html_module.unescape(og_title or "")
+    parts = [p.strip() for p in text.split("|")]
+    return parts[-1] if len(parts) > 1 and parts[-1] else None
+
+
+def _fb_dash_media(body: str) -> tuple[str | None, str | None]:
+    """El manifest DASH embebido separa vídeo (mudo) y audio; devolvemos la
+    representación de mayor bitrate de cada uno. Sin esto no hay audio para
+    transcribir: Facebook no expone un mp4 progresivo (con voz) a crawlers."""
+    m = re.search(r'"dash_manifest_xml_string"\s*:\s*"((?:\\.|[^"\\])*)"', body)
+    if not m:
+        return None, None
+    try:
+        xml_str = json.loads('"' + m.group(1) + '"')
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(xml_str)
+    except Exception:
+        return None, None
+
+    ns = "{urn:mpeg:dash:schema:mpd:2011}"
+    video_url = audio_url = None
+    best_video_bw = best_audio_bw = -1
+    for adaptation_set in root.iter(f"{ns}AdaptationSet"):
+        content_type = adaptation_set.get("contentType")
+        for representation in adaptation_set.iter(f"{ns}Representation"):
+            bandwidth = int(representation.get("bandwidth") or 0)
+            base_url = representation.find(f"{ns}BaseURL")
+            url = base_url.text if base_url is not None else None
+            if not url:
+                continue
+            if content_type == "video" and bandwidth > best_video_bw:
+                best_video_bw, video_url = bandwidth, url
+            elif content_type == "audio" and bandwidth > best_audio_bw:
+                best_audio_bw, audio_url = bandwidth, url
+    return video_url, audio_url
+
+
+def extract_facebook(url: str) -> ScrapeResult:
+    with httpx.Client(
+        follow_redirects=True, timeout=_HTTP_TIMEOUT,
+        headers={"User-Agent": _GOOGLEBOT_UA, "Accept-Language": "es-ES,es;q=0.9,en;q=0.8"},
+    ) as c:
+        r = c.get(url)
+        r.raise_for_status()
+        body = r.text
+
+    def meta(prop: str) -> str | None:
+        m = re.search(
+            rf'<meta[^>]*property="{re.escape(prop)}"[^>]*content="([^"]*)"', body, re.I,
+        )
+        return html_module.unescape(m.group(1)) if m else None
+
+    og_title = meta("og:title")
+    caption = meta("og:description") or ""
+    thumbnail = meta("og:image")
+    views, likes = _fb_stats_from_title(og_title)
+    author = _fb_author_from_title(og_title)
+    # video_url es mudo en el DASH de Facebook (pistas separadas); el audio
+    # real va en audio_url, el campo que Whisper usa como fallback.
+    _, audio_url = _fb_dash_media(body)
+
+    return ScrapeResult(
+        platform="facebook",
+        caption=caption,
+        author=author,
+        hashtags=_hashtags_from(caption),
+        views=views,
+        likes=likes,
+        thumbnail=thumbnail,
+        audio_url=audio_url,
+    )
+
+
 # ─────────────────────────── dispatch ───────────────────────────
 
 def identify_and_extract(url: str, want_html: bool = False) -> ScrapeResult | None:
@@ -470,7 +534,7 @@ def identify_and_extract(url: str, want_html: bool = False) -> ScrapeResult | No
     result: ScrapeResult | None = None
     if re.search(r"instagram\.com/(?:reel|reels|p)/", url):
         result = extract_instagram(url)
-    elif re.search(r"(?:facebook\.com/(?:reel/|watch/?\?|[^/]+/videos/)|fb\.watch/)", url):
+    elif re.search(r"(?:facebook\.com|fb\.watch)/", url):
         result = extract_facebook(url)
     else:
         m = re.search(r"(?:twitter|x)\.com/[^/]+/status/(\d+)", url)

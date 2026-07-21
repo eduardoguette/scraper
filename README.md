@@ -2,8 +2,8 @@
 
 API de scraping de contenido social para [Later](https://github.com/eduardoguette/later).
 Reemplaza a Bright Data: extrae caption/autor/thumbnail/vídeo/stats de
-**Instagram, TikTok, X (Twitter) y YouTube** y los devuelve en una forma
-canónica que consumen las Edge Functions de Supabase de Later.
+**Instagram, TikTok, X (Twitter), YouTube y Facebook** y los devuelve en una
+forma canónica que consumen las Edge Functions de Supabase de Later.
 
 ## Stack
 
@@ -12,6 +12,8 @@ canónica que consumen las Edge Functions de Supabase de Later.
   (Camoufox/Chromium) para Instagram y TikTok
 - **fxtwitter** (API pública) para X
 - **youtube-transcript-api** + página watch para YouTube (transcripción nativa)
+- **UA de Googlebot** para Facebook (og:tags reales sin login; el audio sale
+  del manifest DASH embebido, vía `audio_url`)
 
 ## API
 
